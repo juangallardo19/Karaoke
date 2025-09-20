@@ -34,32 +34,54 @@ const MicrofonoKaraoke = () => {
         await audioContextRef.current.resume();
       }
 
-      // Solicitar acceso al micrófono con configuración optimizada para móviles
+      // Solicitar acceso al micrófono con configuración ANTI-FEEDBACK
       const constraints = {
         audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
+          echoCancellation: true, // ✅ CANCELA EL ECO/FEEDBACK
+          noiseSuppression: true, // ✅ FILTRA RUIDOS DE FONDO
+          autoGainControl: true, // ✅ CONTROLA VOLUMEN AUTOMÁTICO
           latency: 0,
           sampleRate: 44100,
+          channelCount: 1, // ✅ MONO = MEJOR PARA VOZ
         },
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
 
-      // Crear nodos de audio
+      // Crear nodos de audio con FILTROS ANTI-FEEDBACK
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const gainNode = audioContextRef.current.createGain();
+
+      // 🎛️ FILTRO PASO ALTO - Elimina bass y frecuencias bajas
+      const highpassFilter = audioContextRef.current.createBiquadFilter();
+      highpassFilter.type = "highpass";
+      highpassFilter.frequency.value = 80; // Corta frecuencias por debajo de 80Hz
+
+      // 🎛️ FILTRO PASO BAJO - Elimina frecuencias muy altas
+      const lowpassFilter = audioContextRef.current.createBiquadFilter();
+      lowpassFilter.type = "lowpass";
+      lowpassFilter.frequency.value = 8000; // Corta frecuencias por encima de 8kHz
+
+      // 🎛️ COMPRESOR - Evita picos de volumen
+      const compressor = audioContextRef.current.createDynamicsCompressor();
+      compressor.threshold.value = -24; // Umbral de compresión
+      compressor.knee.value = 30; // Suavidad
+      compressor.ratio.value = 12; // Ratio de compresión
+      compressor.attack.value = 0.003; // Ataque rápido
+      compressor.release.value = 0.25; // Liberación suave
 
       sourceNodeRef.current = source;
       gainNodeRef.current = gainNode;
 
       // Configurar ganancia (volumen)
-      gainNode.gain.value = volume;
+      gainNode.gain.value = volume * 0.7; // Reducir volumen inicial para evitar feedback
 
-      // Conectar: micrófono -> ganancia -> altavoces
-      source.connect(gainNode);
+      // 🔗 CADENA DE AUDIO: micrófono -> filtros -> compresor -> ganancia -> altavoces
+      source.connect(highpassFilter);
+      highpassFilter.connect(lowpassFilter);
+      lowpassFilter.connect(compressor);
+      compressor.connect(gainNode);
       gainNode.connect(audioContextRef.current.destination);
 
       setIsRecording(true);
@@ -117,7 +139,9 @@ const MicrofonoKaraoke = () => {
   const handleVolumeChange = (newVolume) => {
     setVolume(newVolume);
     if (gainNodeRef.current && !isMuted) {
-      gainNodeRef.current.gain.value = newVolume;
+      // Aplicar volumen con factor de seguridad para evitar feedback
+      const safeVolume = newVolume * 0.7; // Máximo seguro: 140% en lugar de 200%
+      gainNodeRef.current.gain.value = safeVolume;
     }
   };
 
@@ -474,11 +498,16 @@ const MicrofonoKaraoke = () => {
           )}
         </div>
 
-        {/* Control de volumen */}
+        {/* Control de volumen MEJORADO */}
         {isRecording && (
           <div style={styles.volumeContainer}>
             <label style={styles.volumeLabel}>
               🔊 Volumen: {Math.round(volume * 100)}%
+              <span
+                style={{ color: "rgba(255,255,255,0.6)", fontSize: "12px" }}
+              >
+                (Máx. seguro: 140%)
+              </span>
             </label>
             <input
               type="range"
@@ -490,10 +519,29 @@ const MicrofonoKaraoke = () => {
               style={styles.volumeSlider}
             />
             <div style={styles.volumeLabels}>
-              <span>0%</span>
-              <span>100%</span>
-              <span>200%</span>
+              <span>Silencio</span>
+              <span style={{ color: "rgb(74, 222, 128)" }}>Óptimo</span>
+              <span style={{ color: "rgb(239, 68, 68)" }}>¡Cuidado!</span>
             </div>
+
+            {/* Botón de emergencia */}
+            <button
+              onClick={toggleMute}
+              style={{
+                width: "100%",
+                marginTop: "8px",
+                backgroundColor: "rgba(239, 68, 68, 0.8)",
+                color: "white",
+                padding: "8px",
+                borderRadius: "8px",
+                border: "none",
+                fontSize: "14px",
+                fontWeight: "bold",
+                cursor: "pointer",
+              }}
+            >
+              🚨 BOTÓN DE EMERGENCIA (Si hay eco)
+            </button>
           </div>
         )}
 
@@ -533,7 +581,7 @@ const MicrofonoKaraoke = () => {
           </div>
         )}
 
-        {/* Instrucciones rápidas */}
+        {/* Instrucciones anti-feedback */}
         <div style={styles.instructionsBox}>
           <h3 style={styles.instructionsTitle}>🚀 Pasos rápidos:</h3>
           <ol style={styles.instructionsList}>
@@ -547,6 +595,35 @@ const MicrofonoKaraoke = () => {
               3. Permite permisos cuando aparezca
             </li>
             <li style={styles.instructionsItem}>4. ¡Canta! 🎵</li>
+          </ol>
+        </div>
+
+        {/* Consejos anti-feedback */}
+        <div
+          style={{
+            ...styles.instructionsBox,
+            backgroundColor: "rgba(34, 197, 94, 0.1)",
+            border: "1px solid rgba(34, 197, 94, 0.3)",
+          }}
+        >
+          <h3
+            style={{ ...styles.instructionsTitle, color: "rgb(74, 222, 128)" }}
+          >
+            🛡️ Evitar eco/feedback:
+          </h3>
+          <ol style={styles.instructionsList}>
+            <li style={styles.instructionsItem}>
+              • Mantén distancia entre celular y altavoz
+            </li>
+            <li style={styles.instructionsItem}>
+              • Empieza con volumen bajo y ve subiendo
+            </li>
+            <li style={styles.instructionsItem}>
+              • Apunta el celular LEJOS del altavoz
+            </li>
+            <li style={styles.instructionsItem}>
+              • Si suena eco, baja el volumen
+            </li>
           </ol>
         </div>
 
