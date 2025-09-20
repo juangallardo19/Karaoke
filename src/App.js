@@ -1,12 +1,13 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import React, { useState, useRef, useEffect } from "react";
 
 const MicrofonoKaraoke = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(1);
-  const [error, setError] = useState('');
-  
+  const [error, setError] = useState("");
+  const [showPermissionHelp, setShowPermissionHelp] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+
   const audioContextRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const gainNodeRef = useRef(null);
@@ -20,59 +21,86 @@ const MicrofonoKaraoke = () => {
 
   const startRecording = async () => {
     try {
-      setError('');
-      
+      setError("");
+      setShowPermissionHelp(false);
+      setIsConnected(false);
+
       // Crear contexto de audio
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      
-      // Solicitar acceso al micrófono
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      audioContextRef.current = new (window.AudioContext ||
+        window.webkitAudioContext)();
+
+      // Reanudar contexto si está suspendido (necesario en algunos móviles)
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+
+      // Solicitar acceso al micrófono con configuración optimizada para móviles
+      const constraints = {
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
-          latency: 0
-        } 
-      });
-      
+          latency: 0,
+          sampleRate: 44100,
+        },
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
-      
+
       // Crear nodos de audio
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const gainNode = audioContextRef.current.createGain();
-      
+
       sourceNodeRef.current = source;
       gainNodeRef.current = gainNode;
-      
+
       // Configurar ganancia (volumen)
       gainNode.gain.value = volume;
-      
+
       // Conectar: micrófono -> ganancia -> altavoces
       source.connect(gainNode);
       gainNode.connect(audioContextRef.current.destination);
-      
+
       setIsRecording(true);
-      
+      setIsConnected(true);
     } catch (err) {
-      console.error('Error al acceder al micrófono:', err);
-      setError('No se pudo acceder al micrófono. Asegúrate de dar permisos.');
+      console.error("Error al acceder al micrófono:", err);
+
+      let errorMessage = "";
+      if (err.name === "NotAllowedError") {
+        errorMessage =
+          "Permisos de micrófono denegados. Ve a Configuración para activarlos.";
+        setShowPermissionHelp(true);
+      } else if (err.name === "NotFoundError") {
+        errorMessage = "No se encontró micrófono en tu dispositivo.";
+      } else if (err.name === "NotSupportedError") {
+        errorMessage = "Tu navegador no soporta esta función.";
+      } else {
+        errorMessage = "Error al acceder al micrófono. Revisa los permisos.";
+        setShowPermissionHelp(true);
+      }
+
+      setError(errorMessage);
+      setIsConnected(false);
     }
   };
 
   const stopRecording = () => {
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     }
-    
+
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
     }
-    
+
     sourceNodeRef.current = null;
     gainNodeRef.current = null;
     setIsRecording(false);
+    setIsConnected(false);
   };
 
   const toggleMute = () => {
@@ -93,68 +121,352 @@ const MicrofonoKaraoke = () => {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center p-4">
-      <div className="bg-white/10 backdrop-blur-lg rounded-3xl p-8 max-w-md w-full shadow-2xl border border-white/20">
-        
-        {/* Título */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">🎤 Karaoke Mic</h1>
-          <p className="text-white/70">Micrófono en tiempo real</p>
-        </div>
+  // Detectar navegador y sistema
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isAndroid = /Android/.test(navigator.userAgent);
 
-        {/* Indicador visual */}
-        <div className="flex justify-center mb-8">
-          <div className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-300 ${
-            isRecording 
-              ? 'bg-red-500/20 border-4 border-red-500 animate-pulse' 
-              : 'bg-gray-500/20 border-4 border-gray-500'
-          }`}>
-            {isRecording ? (
-              <Mic className="w-16 h-16 text-red-400" />
+  // Estilos CSS inline
+  const styles = {
+    container: {
+      minHeight: "100vh",
+      background:
+        "linear-gradient(135deg, #581c87 0%, #1e3a8a 50%, #312e81 100%)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "16px",
+    },
+    card: {
+      background: "rgba(255, 255, 255, 0.1)",
+      backdropFilter: "blur(16px)",
+      borderRadius: "24px",
+      padding: "24px",
+      maxWidth: "448px",
+      width: "100%",
+      boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+      border: "1px solid rgba(255, 255, 255, 0.2)",
+    },
+    title: {
+      textAlign: "center",
+      marginBottom: "24px",
+    },
+    h1: {
+      fontSize: "1.875rem",
+      fontWeight: "bold",
+      color: "white",
+      marginBottom: "8px",
+      margin: "0",
+    },
+    subtitle: {
+      color: "rgba(255, 255, 255, 0.7)",
+      margin: "0",
+    },
+    statusBadge: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: "8px",
+    },
+    deviceInfo: {
+      background: "rgba(255, 255, 255, 0.05)",
+      borderRadius: "12px",
+      padding: "12px",
+      marginBottom: "16px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "rgba(255, 255, 255, 0.8)",
+      fontSize: "14px",
+    },
+    micIndicator: {
+      display: "flex",
+      justifyContent: "center",
+      marginBottom: "24px",
+    },
+    micCircle: {
+      width: "112px",
+      height: "112px",
+      borderRadius: "50%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      transition: "all 0.3s ease",
+      background: isRecording
+        ? "rgba(239, 68, 68, 0.2)"
+        : "rgba(107, 114, 128, 0.2)",
+      border: isRecording
+        ? "4px solid rgb(239, 68, 68)"
+        : "4px solid rgb(107, 114, 128)",
+      animation: isRecording
+        ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite"
+        : "none",
+    },
+    statusText: {
+      textAlign: "center",
+      marginBottom: "16px",
+      color: "white",
+      fontSize: "18px",
+      fontWeight: "500",
+      margin: "0 0 16px 0",
+    },
+    buttonContainer: {
+      display: "flex",
+      flexDirection: "column",
+      gap: "12px",
+      marginBottom: "16px",
+    },
+    button: {
+      width: "100%",
+      padding: "16px",
+      borderRadius: "16px",
+      fontWeight: "bold",
+      fontSize: "18px",
+      transition: "all 0.3s ease",
+      border: "none",
+      cursor: "pointer",
+      touchAction: "manipulation",
+    },
+    primaryButton: {
+      background: isRecording ? "rgb(239, 68, 68)" : "rgb(34, 197, 94)",
+      color: "white",
+    },
+    secondaryButton: {
+      background: isMuted ? "rgb(234, 179, 8)" : "rgb(59, 130, 246)",
+      color: "white",
+      padding: "12px",
+      fontSize: "16px",
+      fontWeight: "500",
+    },
+    volumeContainer: {
+      marginBottom: "16px",
+    },
+    volumeLabel: {
+      display: "block",
+      color: "white",
+      fontSize: "14px",
+      fontWeight: "500",
+      marginBottom: "8px",
+    },
+    volumeSlider: {
+      width: "100%",
+      height: "12px",
+      backgroundColor: "rgba(255, 255, 255, 0.2)",
+      borderRadius: "6px",
+      appearance: "none",
+      outline: "none",
+      cursor: "pointer",
+    },
+    volumeLabels: {
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: "12px",
+      color: "rgba(255, 255, 255, 0.6)",
+      marginTop: "4px",
+    },
+    errorBox: {
+      backgroundColor: "rgba(239, 68, 68, 0.2)",
+      border: "1px solid rgb(239, 68, 68)",
+      borderRadius: "16px",
+      padding: "16px",
+      marginBottom: "16px",
+      display: "flex",
+      alignItems: "flex-start",
+    },
+    helpBox: {
+      backgroundColor: "rgba(245, 158, 11, 0.2)",
+      border: "1px solid rgb(245, 158, 11)",
+      borderRadius: "16px",
+      padding: "16px",
+      marginBottom: "16px",
+    },
+    helpTitle: {
+      color: "rgb(253, 224, 71)",
+      fontWeight: "bold",
+      marginBottom: "8px",
+      display: "flex",
+      alignItems: "center",
+      margin: "0 0 8px 0",
+    },
+    helpText: {
+      color: "rgb(254, 243, 199)",
+      fontSize: "14px",
+      margin: "0 0 4px 0",
+    },
+    helpButton: {
+      marginTop: "12px",
+      backgroundColor: "rgb(245, 158, 11)",
+      color: "white",
+      padding: "8px 16px",
+      borderRadius: "8px",
+      border: "none",
+      fontSize: "14px",
+      cursor: "pointer",
+    },
+    instructionsBox: {
+      background: "rgba(255, 255, 255, 0.05)",
+      borderRadius: "16px",
+      padding: "16px",
+      marginBottom: "16px",
+    },
+    instructionsTitle: {
+      color: "white",
+      fontWeight: "500",
+      marginBottom: "8px",
+      margin: "0 0 8px 0",
+    },
+    instructionsList: {
+      color: "rgba(255, 255, 255, 0.8)",
+      fontSize: "14px",
+      margin: "0",
+      paddingLeft: "0",
+      listStyle: "none",
+    },
+    instructionsItem: {
+      marginBottom: "4px",
+    },
+    helpToggleButton: {
+      width: "100%",
+      background: "rgba(255, 255, 255, 0.1)",
+      color: "white",
+      padding: "8px",
+      borderRadius: "12px",
+      fontSize: "14px",
+      transition: "all 0.3s ease",
+      border: "none",
+      cursor: "pointer",
+    },
+    footer: {
+      textAlign: "center",
+      marginTop: "16px",
+      color: "rgba(255, 255, 255, 0.5)",
+      fontSize: "12px",
+    },
+  };
+
+  return (
+    <div style={styles.container}>
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+          }
+        `}
+      </style>
+
+      <div style={styles.card}>
+        {/* Título */}
+        <div style={styles.title}>
+          <h1 style={styles.h1}>🎤 Karaoke Mic</h1>
+          <p style={styles.subtitle}>Micrófono en tiempo real</p>
+          <div style={styles.statusBadge}>
+            {isConnected ? (
+              <>
+                <span style={{ fontSize: "20px", marginRight: "4px" }}>📶</span>
+                <span style={{ color: "rgb(74, 222, 128)", fontSize: "14px" }}>
+                  Conectado
+                </span>
+              </>
             ) : (
-              <MicOff className="w-16 h-16 text-gray-400" />
+              <>
+                <span style={{ fontSize: "20px", marginRight: "4px" }}>📵</span>
+                <span style={{ color: "rgb(156, 163, 175)", fontSize: "14px" }}>
+                  Desconectado
+                </span>
+              </>
             )}
           </div>
         </div>
 
+        {/* Indicador de navegador */}
+        <div style={styles.deviceInfo}>
+          <span style={{ fontSize: "16px", marginRight: "8px" }}>📱</span>
+          {isIOS && "iPhone/iPad detectado"}
+          {isAndroid && "Android detectado"}
+          {!isIOS && !isAndroid && "Escritorio detectado"}
+        </div>
+
+        {/* Ayuda de permisos */}
+        {showPermissionHelp && (
+          <div style={styles.helpBox}>
+            <h3 style={styles.helpTitle}>
+              <span style={{ marginRight: "8px" }}>⚙️</span>
+              CÓMO DAR PERMISOS:
+            </h3>
+
+            {isIOS && (
+              <div>
+                <p style={styles.helpText}>
+                  <strong>En iPhone/iPad:</strong>
+                </p>
+                <p style={styles.helpText}>1. Ve a Configuración → Safari</p>
+                <p style={styles.helpText}>2. Busca "Micrófono"</p>
+                <p style={styles.helpText}>3. Activa "Permitir sitios web"</p>
+                <p style={styles.helpText}>4. Regresa y recarga la página</p>
+              </div>
+            )}
+
+            {isAndroid && (
+              <div>
+                <p style={styles.helpText}>
+                  <strong>En Android:</strong>
+                </p>
+                <p style={styles.helpText}>
+                  1. Toca el ícono 🔒 en la barra de dirección
+                </p>
+                <p style={styles.helpText}>2. Toca "Permisos"</p>
+                <p style={styles.helpText}>3. Activa "Micrófono"</p>
+                <p style={styles.helpText}>4. Recarga la página</p>
+              </div>
+            )}
+
+            <button
+              onClick={() => setShowPermissionHelp(false)}
+              style={styles.helpButton}
+            >
+              Entendido
+            </button>
+          </div>
+        )}
+
+        {/* Indicador visual */}
+        <div style={styles.micIndicator}>
+          <div style={styles.micCircle}>
+            <span style={{ fontSize: "48px" }}>
+              {isRecording ? "🎙️" : "🔇"}
+            </span>
+          </div>
+        </div>
+
         {/* Estado */}
-        <div className="text-center mb-6">
-          <p className="text-white text-lg font-medium">
-            {isRecording ? '🔴 TRANSMITIENDO' : '⚪ DESCONECTADO'}
+        <div>
+          <p style={styles.statusText}>
+            {isRecording ? "🔴 TRANSMITIENDO" : "⚪ LISTO PARA INICIAR"}
           </p>
         </div>
 
         {/* Controles principales */}
-        <div className="space-y-4 mb-6">
+        <div style={styles.buttonContainer}>
           <button
             onClick={isRecording ? stopRecording : startRecording}
-            className={`w-full py-4 rounded-2xl font-bold text-lg transition-all duration-300 ${
-              isRecording
-                ? 'bg-red-500 hover:bg-red-600 text-white'
-                : 'bg-green-500 hover:bg-green-600 text-white'
-            }`}
+            style={{ ...styles.button, ...styles.primaryButton }}
           >
-            {isRecording ? 'DETENER' : 'INICIAR MICRÓFONO'}
+            {isRecording ? "⏹️ DETENER" : "▶️ ACTIVAR MICRÓFONO"}
           </button>
 
           {isRecording && (
             <button
               onClick={toggleMute}
-              className={`w-full py-3 rounded-2xl font-medium transition-all duration-300 ${
-                isMuted
-                  ? 'bg-yellow-500 hover:bg-yellow-600 text-white'
-                  : 'bg-blue-500 hover:bg-blue-600 text-white'
-              }`}
+              style={{ ...styles.button, ...styles.secondaryButton }}
             >
               {isMuted ? (
                 <>
-                  <VolumeX className="inline w-5 h-5 mr-2" />
+                  <span style={{ marginRight: "8px" }}>🔊</span>
                   ACTIVAR SONIDO
                 </>
               ) : (
                 <>
-                  <Volume2 className="inline w-5 h-5 mr-2" />
+                  <span style={{ marginRight: "8px" }}>🔇</span>
                   SILENCIAR
                 </>
               )}
@@ -164,9 +476,9 @@ const MicrofonoKaraoke = () => {
 
         {/* Control de volumen */}
         {isRecording && (
-          <div className="mb-6">
-            <label className="block text-white text-sm font-medium mb-2">
-              Volumen: {Math.round(volume * 100)}%
+          <div style={styles.volumeContainer}>
+            <label style={styles.volumeLabel}>
+              🔊 Volumen: {Math.round(volume * 100)}%
             </label>
             <input
               type="range"
@@ -175,12 +487,9 @@ const MicrofonoKaraoke = () => {
               step="0.1"
               value={volume}
               onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-              className="w-full h-2 bg-white/20 rounded-lg appearance-none slider"
-              style={{
-                background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${volume * 50}%, rgba(255,255,255,0.2) ${volume * 50}%, rgba(255,255,255,0.2) 100%)`
-              }}
+              style={styles.volumeSlider}
             />
-            <div className="flex justify-between text-xs text-white/60 mt-1">
+            <div style={styles.volumeLabels}>
               <span>0%</span>
               <span>100%</span>
               <span>200%</span>
@@ -188,31 +497,73 @@ const MicrofonoKaraoke = () => {
           </div>
         )}
 
-        {/* Instrucciones */}
-        <div className="bg-white/5 rounded-2xl p-4 mb-4">
-          <h3 className="text-white font-medium mb-2">📋 Instrucciones:</h3>
-          <ol className="text-white/80 text-sm space-y-1">
-            <li>1. Conecta tu celular al altavoz Bluetooth</li>
-            <li>2. Presiona "INICIAR MICRÓFONO"</li>
-            <li>3. Permite el acceso al micrófono</li>
-            <li>4. ¡Canta y disfruta! 🎵</li>
-          </ol>
-        </div>
-
         {/* Error */}
         {error && (
-          <div className="bg-red-500/20 border border-red-500 rounded-2xl p-4 mb-4">
-            <p className="text-red-200 text-sm">⚠️ {error}</p>
+          <div style={styles.errorBox}>
+            <span
+              style={{
+                fontSize: "20px",
+                marginRight: "8px",
+                marginTop: "2px",
+              }}
+            >
+              ⚠️
+            </span>
+            <div>
+              <p
+                style={{
+                  color: "rgb(252, 165, 165)",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  margin: "0 0 4px 0",
+                }}
+              >
+                Error:
+              </p>
+              <p
+                style={{
+                  color: "rgb(252, 165, 165)",
+                  fontSize: "14px",
+                  margin: "0",
+                }}
+              >
+                {error}
+              </p>
+            </div>
           </div>
         )}
 
-        {/* Consejo */}
-        <div className="bg-blue-500/20 border border-blue-500 rounded-2xl p-4">
-          <p className="text-blue-200 text-sm">
-            💡 <strong>Consejo:</strong> Ajusta el volumen para evitar retroalimentación (feedback).
-          </p>
+        {/* Instrucciones rápidas */}
+        <div style={styles.instructionsBox}>
+          <h3 style={styles.instructionsTitle}>🚀 Pasos rápidos:</h3>
+          <ol style={styles.instructionsList}>
+            <li style={styles.instructionsItem}>
+              1. Conecta Bluetooth al altavoz
+            </li>
+            <li style={styles.instructionsItem}>
+              2. Presiona "ACTIVAR MICRÓFONO"
+            </li>
+            <li style={styles.instructionsItem}>
+              3. Permite permisos cuando aparezca
+            </li>
+            <li style={styles.instructionsItem}>4. ¡Canta! 🎵</li>
+          </ol>
         </div>
 
+        {/* Botón de ayuda */}
+        <button
+          onClick={() => setShowPermissionHelp(true)}
+          style={styles.helpToggleButton}
+        >
+          ❓ ¿Problemas con permisos?
+        </button>
+
+        {/* Footer */}
+        <div style={styles.footer}>
+          <p style={{ margin: "0" }}>
+            🎤 Karaoke Mic v1.0 - ¡Canta sin límites!
+          </p>
+        </div>
       </div>
     </div>
   );
