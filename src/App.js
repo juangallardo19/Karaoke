@@ -7,17 +7,69 @@ const MicrofonoKaraoke = () => {
   const [error, setError] = useState("");
   const [showPermissionHelp, setShowPermissionHelp] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [sensitivity, setSensitivity] = useState(0.1); // 🎯 SENSIBILIDAD DE PROXIMIDAD
+  const [voiceLevel, setVoiceLevel] = useState(0); // 📊 NIVEL DE VOZ EN TIEMPO REAL
+  const [isVoiceDetected, setIsVoiceDetected] = useState(false); // 🎤 DETECCIÓN DE VOZ
 
   const audioContextRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const gainNodeRef = useRef(null);
   const sourceNodeRef = useRef(null);
+  const analyserRef = useRef(null); // 📊 ANALIZADOR DE AUDIO
+  const noiseGateRef = useRef(null); // 🚪 PUERTA DE RUIDO
 
   useEffect(() => {
     return () => {
       stopRecording();
     };
   }, []);
+
+  // 📊 MONITOREO DE AUDIO EN TIEMPO REAL
+  const startVoiceMonitoring = () => {
+    if (!analyserRef.current) return;
+
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+
+    const monitorAudio = () => {
+      if (!analyserRef.current || !isRecording) return;
+
+      analyserRef.current.getByteFrequencyData(dataArray);
+
+      // 🎯 CALCULAR NIVEL PROMEDIO (solo frecuencias de voz: 300Hz - 3400Hz)
+      let sum = 0;
+      const voiceStart = Math.floor((300 * dataArray.length) / 22050); // 300Hz
+      const voiceEnd = Math.floor((3400 * dataArray.length) / 22050); // 3400Hz
+
+      for (let i = voiceStart; i < voiceEnd; i++) {
+        sum += dataArray[i];
+      }
+
+      const average = sum / (voiceEnd - voiceStart);
+      const normalizedLevel = average / 255; // Normalizar 0-1
+
+      setVoiceLevel(normalizedLevel);
+
+      // 🎤 DETECTAR SI HAY VOZ (por encima del umbral de sensibilidad)
+      const isVoiceActive = normalizedLevel > sensitivity;
+      setIsVoiceDetected(isVoiceActive);
+
+      // 🚪 APLICAR NOISE GATE
+      if (noiseGateRef.current) {
+        if (isVoiceActive) {
+          // Permitir audio cuando hay voz
+          noiseGateRef.current.gain.value = 1;
+        } else {
+          // Bloquear audio cuando no hay voz cercana
+          noiseGateRef.current.gain.value = 0;
+        }
+      }
+
+      // Continuar monitoreando
+      requestAnimationFrame(monitorAudio);
+    };
+
+    monitorAudio();
+  };
 
   const startRecording = async () => {
     try {
@@ -49,40 +101,65 @@ const MicrofonoKaraoke = () => {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
 
-      // Crear nodos de audio con FILTROS ANTI-FEEDBACK
+      // Crear nodos de audio con FILTROS AVANZADOS DE PROXIMIDAD
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const gainNode = audioContextRef.current.createGain();
 
-      // 🎛️ FILTRO PASO ALTO - Elimina bass y frecuencias bajas
-      const highpassFilter = audioContextRef.current.createBiquadFilter();
-      highpassFilter.type = "highpass";
-      highpassFilter.frequency.value = 80; // Corta frecuencias por debajo de 80Hz
+      // 📊 ANALIZADOR DE AUDIO - Monitorea niveles en tiempo real
+      const analyser = audioContextRef.current.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.8;
 
-      // 🎛️ FILTRO PASO BAJO - Elimina frecuencias muy altas
-      const lowpassFilter = audioContextRef.current.createBiquadFilter();
-      lowpassFilter.type = "lowpass";
-      lowpassFilter.frequency.value = 8000; // Corta frecuencias por encima de 8kHz
+      // 🚪 NOISE GATE - Solo permite sonidos cercanos/fuertes
+      const noiseGate = audioContextRef.current.createGain();
+      noiseGate.gain.value = 0; // Empieza cerrado
 
-      // 🎛️ COMPRESOR - Evita picos de volumen
+      // 🎛️ FILTRO ESPECÍFICO PARA VOZ HUMANA (300Hz - 3400Hz)
+      const voiceLowpass = audioContextRef.current.createBiquadFilter();
+      voiceLowpass.type = "lowpass";
+      voiceLowpass.frequency.value = 3400; // Corta por encima de 3400Hz
+      voiceLowpass.Q.value = 1;
+
+      const voiceHighpass = audioContextRef.current.createBiquadFilter();
+      voiceHighpass.type = "highpass";
+      voiceHighpass.frequency.value = 300; // Corta por debajo de 300Hz
+      voiceHighpass.Q.value = 1;
+
+      // 🎛️ FILTRO NOTCH - Elimina frecuencias problemáticas específicas
+      const notchFilter = audioContextRef.current.createBiquadFilter();
+      notchFilter.type = "notch";
+      notchFilter.frequency.value = 60; // Elimina ruido eléctrico 60Hz
+      notchFilter.Q.value = 30;
+
+      // 🎛️ COMPRESOR - Controla dinámicas
       const compressor = audioContextRef.current.createDynamicsCompressor();
-      compressor.threshold.value = -24; // Umbral de compresión
-      compressor.knee.value = 30; // Suavidad
-      compressor.ratio.value = 12; // Ratio de compresión
-      compressor.attack.value = 0.003; // Ataque rápido
-      compressor.release.value = 0.25; // Liberación suave
+      compressor.threshold.value = -30; // Umbral más sensible
+      compressor.knee.value = 40; // Suavidad
+      compressor.ratio.value = 15; // Ratio fuerte
+      compressor.attack.value = 0.001; // Ataque muy rápido
+      compressor.release.value = 0.1; // Liberación rápida
 
       sourceNodeRef.current = source;
       gainNodeRef.current = gainNode;
+      analyserRef.current = analyser;
+      noiseGateRef.current = noiseGate;
 
       // Configurar ganancia (volumen)
-      gainNode.gain.value = volume * 0.7; // Reducir volumen inicial para evitar feedback
+      gainNode.gain.value = volume * 0.8; // Volumen seguro
 
-      // 🔗 CADENA DE AUDIO: micrófono -> filtros -> compresor -> ganancia -> altavoces
-      source.connect(highpassFilter);
-      highpassFilter.connect(lowpassFilter);
-      lowpassFilter.connect(compressor);
-      compressor.connect(gainNode);
+      // 🔗 CADENA DE AUDIO PROFESIONAL:
+      // micrófono -> analizador -> filtro voz -> notch -> compresor -> noise gate -> ganancia -> altavoces
+      source.connect(analyser);
+      analyser.connect(voiceHighpass);
+      voiceHighpass.connect(voiceLowpass);
+      voiceLowpass.connect(notchFilter);
+      notchFilter.connect(compressor);
+      compressor.connect(noiseGate);
+      noiseGate.connect(gainNode);
       gainNode.connect(audioContextRef.current.destination);
+
+      // 🎯 INICIAR MONITOREO DE VOZ
+      startVoiceMonitoring();
 
       setIsRecording(true);
       setIsConnected(true);
@@ -140,9 +217,14 @@ const MicrofonoKaraoke = () => {
     setVolume(newVolume);
     if (gainNodeRef.current && !isMuted) {
       // Aplicar volumen con factor de seguridad para evitar feedback
-      const safeVolume = newVolume * 0.7; // Máximo seguro: 140% en lugar de 200%
+      const safeVolume = newVolume * 0.8; // Máximo seguro: 160% en lugar de 200%
       gainNodeRef.current.gain.value = safeVolume;
     }
+  };
+
+  // 🎯 CONTROL DE SENSIBILIDAD - Qué tan cerca debe estar tu voz
+  const handleSensitivityChange = (newSensitivity) => {
+    setSensitivity(newSensitivity);
   };
 
   // Detectar navegador y sistema
@@ -206,6 +288,7 @@ const MicrofonoKaraoke = () => {
       display: "flex",
       justifyContent: "center",
       marginBottom: "24px",
+      position: "relative",
     },
     micCircle: {
       width: "112px",
@@ -453,20 +536,90 @@ const MicrofonoKaraoke = () => {
           </div>
         )}
 
-        {/* Indicador visual */}
+        {/* Indicador visual CON MEDIDOR DE VOZ */}
         <div style={styles.micIndicator}>
-          <div style={styles.micCircle}>
+          <div
+            style={{
+              ...styles.micCircle,
+              background: isVoiceDetected
+                ? "rgba(34, 197, 94, 0.3)"
+                : isRecording
+                ? "rgba(239, 68, 68, 0.2)"
+                : "rgba(107, 114, 128, 0.2)",
+              border: isVoiceDetected
+                ? "4px solid rgb(34, 197, 94)"
+                : isRecording
+                ? "4px solid rgb(239, 68, 68)"
+                : "4px solid rgb(107, 114, 128)",
+              animation: isVoiceDetected
+                ? "pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite"
+                : isRecording
+                ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite"
+                : "none",
+            }}
+          >
             <span style={{ fontSize: "48px" }}>
-              {isRecording ? "🎙️" : "🔇"}
+              {isVoiceDetected ? "🎙️" : isRecording ? "👂" : "🔇"}
             </span>
           </div>
+
+          {/* MEDIDOR DE NIVEL DE VOZ EN TIEMPO REAL */}
+          {isRecording && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "-10px",
+                left: "50%",
+                transform: "translateX(-50%)",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              {[...Array(10)].map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: "4px",
+                    height: "12px",
+                    backgroundColor:
+                      i < voiceLevel * 10
+                        ? isVoiceDetected
+                          ? "rgb(34, 197, 94)"
+                          : "rgb(239, 68, 68)"
+                        : "rgba(255, 255, 255, 0.2)",
+                    borderRadius: "2px",
+                    transition: "background-color 0.1s",
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Estado */}
+        {/* Estado CON DETECCIÓN DE VOZ */}
         <div>
           <p style={styles.statusText}>
-            {isRecording ? "🔴 TRANSMITIENDO" : "⚪ LISTO PARA INICIAR"}
+            {!isRecording
+              ? "⚪ LISTO PARA INICIAR"
+              : isVoiceDetected
+              ? "🟢 DETECTANDO TU VOZ"
+              : "🟡 ESPERANDO VOZ CERCANA"}
           </p>
+          {isRecording && (
+            <p
+              style={{
+                ...styles.statusText,
+                fontSize: "14px",
+                color: "rgba(255, 255, 255, 0.7)",
+                marginTop: "-8px",
+              }}
+            >
+              {isVoiceDetected
+                ? "¡Perfecto! Solo tu voz se escucha"
+                : "Acércate más o habla más fuerte"}
+            </p>
+          )}
         </div>
 
         {/* Controles principales */}
@@ -498,6 +651,36 @@ const MicrofonoKaraoke = () => {
           )}
         </div>
 
+        {/* Control de SENSIBILIDAD DE PROXIMIDAD */}
+        {isRecording && (
+          <div style={styles.volumeContainer}>
+            <label style={styles.volumeLabel}>
+              🎯 Sensibilidad: {Math.round(sensitivity * 100)}%
+              <span
+                style={{ color: "rgba(255,255,255,0.6)", fontSize: "12px" }}
+              >
+                (Qué tan cerca detecta tu voz)
+              </span>
+            </label>
+            <input
+              type="range"
+              min="0.05"
+              max="0.5"
+              step="0.05"
+              value={sensitivity}
+              onChange={(e) =>
+                handleSensitivityChange(parseFloat(e.target.value))
+              }
+              style={styles.volumeSlider}
+            />
+            <div style={styles.volumeLabels}>
+              <span style={{ color: "rgb(239, 68, 68)" }}>Muy cerca</span>
+              <span style={{ color: "rgb(74, 222, 128)" }}>Óptimo</span>
+              <span style={{ color: "rgb(239, 68, 68)" }}>Muy lejos</span>
+            </div>
+          </div>
+        )}
+
         {/* Control de volumen MEJORADO */}
         {isRecording && (
           <div style={styles.volumeContainer}>
@@ -506,7 +689,7 @@ const MicrofonoKaraoke = () => {
               <span
                 style={{ color: "rgba(255,255,255,0.6)", fontSize: "12px" }}
               >
-                (Máx. seguro: 140%)
+                (Máx. seguro: 160%)
               </span>
             </label>
             <input
@@ -598,7 +781,7 @@ const MicrofonoKaraoke = () => {
           </ol>
         </div>
 
-        {/* Consejos anti-feedback */}
+        {/* Consejos de proximidad */}
         <div
           style={{
             ...styles.instructionsBox,
@@ -609,20 +792,20 @@ const MicrofonoKaraoke = () => {
           <h3
             style={{ ...styles.instructionsTitle, color: "rgb(74, 222, 128)" }}
           >
-            🛡️ Evitar eco/feedback:
+            🎯 Micrófono de proximidad:
           </h3>
           <ol style={styles.instructionsList}>
             <li style={styles.instructionsItem}>
-              • Mantén distancia entre celular y altavoz
+              • Solo detecta TU VOZ cuando estás cerca
             </li>
             <li style={styles.instructionsItem}>
-              • Empieza con volumen bajo y ve subiendo
+              • Bloquea música de fondo automáticamente
             </li>
             <li style={styles.instructionsItem}>
-              • Apunta el celular LEJOS del altavoz
+              • Ajusta la sensibilidad según tu distancia
             </li>
             <li style={styles.instructionsItem}>
-              • Si suena eco, baja el volumen
+              • El medidor verde = tu voz se detecta ✅
             </li>
           </ol>
         </div>
