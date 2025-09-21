@@ -7,7 +7,7 @@ const MicrofonoKaraoke = () => {
   const [error, setError] = useState("");
   const [showPermissionHelp, setShowPermissionHelp] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [sensitivity, setSensitivity] = useState(0.1); // 🎯 SENSIBILIDAD DE PROXIMIDAD
+  const [sensitivity, setSensitivity] = useState(0.05); // 🎯 MÁS SENSIBLE por defecto
   const [voiceLevel, setVoiceLevel] = useState(0); // 📊 NIVEL DE VOZ EN TIEMPO REAL
   const [isVoiceDetected, setIsVoiceDetected] = useState(false); // 🎤 DETECCIÓN DE VOZ
   const [ultraLowLatency, setUltraLowLatency] = useState(true); // ⚡ MODO ULTRA-RÁPIDO
@@ -25,7 +25,7 @@ const MicrofonoKaraoke = () => {
     };
   }, []);
 
-  // 📊 MONITOREO DE AUDIO OPTIMIZADO PARA BAJA LATENCIA
+  // 📊 MONITOREO DE AUDIO OPTIMIZADO Y FUNCIONAL
   const startVoiceMonitoring = () => {
     if (!analyserRef.current) return;
 
@@ -36,27 +36,39 @@ const MicrofonoKaraoke = () => {
 
       analyserRef.current.getByteFrequencyData(dataArray);
 
-      // 🎯 CÁLCULO ULTRA-RÁPIDO (menos precisión pero MÁS VELOCIDAD)
+      // 🎯 DETECCIÓN MEJORADA - Más sensible pero rápida
       let sum = 0;
-      const step = 4; // ⚡ SALTAR MUESTRAS = MENOS CÁLCULO
+      let maxValue = 0;
 
-      for (let i = 20; i < 100; i += step) {
-        // Rango optimizado para voz
+      // Revisar frecuencias de voz humana (incluso con FFT pequeño)
+      for (let i = 5; i < 50; i++) {
+        // Rango ajustado para FFT 512
         sum += dataArray[i];
+        maxValue = Math.max(maxValue, dataArray[i]);
       }
 
-      const average = sum / ((100 - 20) / step);
-      const normalizedLevel = average / 255; // Normalizar 0-1
+      const average = sum / 45;
+      const normalizedLevel = Math.max(average / 255, maxValue / 255);
 
       setVoiceLevel(normalizedLevel);
 
-      // 🎤 DETECCIÓN INSTANTÁNEA DE VOZ
-      const isVoiceActive = normalizedLevel > sensitivity;
+      // 🎤 DETECCIÓN MÁS SENSIBLE + PICOS
+      const isVoiceActive =
+        normalizedLevel > sensitivity || maxValue > sensitivity * 255 * 1.5;
       setIsVoiceDetected(isVoiceActive);
 
-      // 🚪 APLICAR NOISE GATE INMEDIATO (sin interpolación = más rápido)
+      // 🚪 NOISE GATE CON HISTÉRESIS (evita on/off constante)
       if (noiseGateRef.current) {
-        noiseGateRef.current.gain.value = isVoiceActive ? 1 : 0;
+        if (isVoiceActive) {
+          noiseGateRef.current.gain.value = 1;
+        } else {
+          // Solo cierra si no hay voz por un tiempo
+          setTimeout(() => {
+            if (noiseGateRef.current && normalizedLevel < sensitivity * 0.5) {
+              noiseGateRef.current.gain.value = 0.1; // Muy bajito en lugar de cerrado
+            }
+          }, 100);
+        }
       }
 
       // ⚡ CONTINUAR CON ALTA FRECUENCIA
@@ -109,9 +121,9 @@ const MicrofonoKaraoke = () => {
       analyser.fftSize = 512; // ⚡ MÁS PEQUEÑO = MENOS DELAY
       analyser.smoothingTimeConstant = 0.1; // ⚡ RESPUESTA MÁS RÁPIDA
 
-      // 🚪 NOISE GATE SIMPLE - Sin demora
+      // 🚪 NOISE GATE INTELIGENTE - Empieza ABIERTO para detectar voz
       const noiseGate = audioContextRef.current.createGain();
-      noiseGate.gain.value = 0; // Empieza cerrado
+      noiseGate.gain.value = 1; // ✅ EMPEZAR ABIERTO para poder detectar voz inicial
 
       // 🎛️ SOLO UN FILTRO ESENCIAL - Para mantener latencia baja
       const voiceFilter = audioContextRef.current.createBiquadFilter();
@@ -649,7 +661,7 @@ const MicrofonoKaraoke = () => {
           )}
         </div>
 
-        {/* Control de SENSIBILIDAD DE PROXIMIDAD */}
+        {/* Control de SENSIBILIDAD DE PROXIMIDAD MEJORADO */}
         {isRecording && (
           <div style={styles.volumeContainer}>
             <label style={styles.volumeLabel}>
@@ -657,14 +669,18 @@ const MicrofonoKaraoke = () => {
               <span
                 style={{ color: "rgba(255,255,255,0.6)", fontSize: "12px" }}
               >
-                (Qué tan cerca detecta tu voz)
+                {sensitivity < 0.08
+                  ? " (Muy sensible)"
+                  : sensitivity < 0.15
+                  ? " (Normal)"
+                  : " (Poco sensible)"}
               </span>
             </label>
             <input
               type="range"
-              min="0.05"
-              max="0.5"
-              step="0.05"
+              min="0.02"
+              max="0.3"
+              step="0.01"
               value={sensitivity}
               onChange={(e) =>
                 handleSensitivityChange(parseFloat(e.target.value))
@@ -672,10 +688,33 @@ const MicrofonoKaraoke = () => {
               style={styles.volumeSlider}
             />
             <div style={styles.volumeLabels}>
-              <span style={{ color: "rgb(239, 68, 68)" }}>Muy cerca</span>
+              <span style={{ color: "rgb(34, 197, 94)" }}>Muy sensible</span>
               <span style={{ color: "rgb(74, 222, 128)" }}>Óptimo</span>
-              <span style={{ color: "rgb(239, 68, 68)" }}>Muy lejos</span>
+              <span style={{ color: "rgb(239, 68, 68)" }}>Poco sensible</span>
             </div>
+
+            {/* BOTÓN DE PRUEBA */}
+            <button
+              style={{
+                width: "100%",
+                marginTop: "8px",
+                backgroundColor: isVoiceDetected
+                  ? "rgba(34, 197, 94, 0.8)"
+                  : "rgba(239, 68, 68, 0.8)",
+                color: "white",
+                padding: "8px",
+                borderRadius: "8px",
+                border: "none",
+                fontSize: "12px",
+                fontWeight: "bold",
+                cursor: "default",
+                transition: "background-color 0.2s",
+              }}
+            >
+              {isVoiceDetected
+                ? "✅ DETECTANDO TU VOZ CORRECTAMENTE"
+                : "❌ HABLA MÁS FUERTE O ACÉRCATE MÁS"}
+            </button>
           </div>
         )}
 
@@ -762,20 +801,25 @@ const MicrofonoKaraoke = () => {
           </div>
         )}
 
-        {/* Instrucciones anti-feedback */}
+        {/* Instrucciones para detectar voz */}
         <div style={styles.instructionsBox}>
-          <h3 style={styles.instructionsTitle}>🚀 Pasos rápidos:</h3>
+          <h3 style={styles.instructionsTitle}>
+            🎤 Configurar detección de voz:
+          </h3>
           <ol style={styles.instructionsList}>
+            <li style={styles.instructionsItem}>1. Activa el micrófono</li>
             <li style={styles.instructionsItem}>
-              1. Conecta Bluetooth al altavoz
+              2. Habla normalmente al celular
             </li>
             <li style={styles.instructionsItem}>
-              2. Presiona "ACTIVAR MICRÓFONO"
+              3. Si no detecta: ⬆️ SUBE la sensibilidad
             </li>
             <li style={styles.instructionsItem}>
-              3. Permite permisos cuando aparezca
+              4. Si detecta ruidos: ⬇️ BAJA la sensibilidad
             </li>
-            <li style={styles.instructionsItem}>4. ¡Canta! 🎵</li>
+            <li style={styles.instructionsItem}>
+              5. El botón debe ponerse ✅ VERDE
+            </li>
           </ol>
         </div>
 
