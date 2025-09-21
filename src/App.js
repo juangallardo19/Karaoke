@@ -10,6 +10,7 @@ const MicrofonoKaraoke = () => {
   const [sensitivity, setSensitivity] = useState(0.1); // 🎯 SENSIBILIDAD DE PROXIMIDAD
   const [voiceLevel, setVoiceLevel] = useState(0); // 📊 NIVEL DE VOZ EN TIEMPO REAL
   const [isVoiceDetected, setIsVoiceDetected] = useState(false); // 🎤 DETECCIÓN DE VOZ
+  const [ultraLowLatency, setUltraLowLatency] = useState(true); // ⚡ MODO ULTRA-RÁPIDO
 
   const audioContextRef = useRef(null);
   const mediaStreamRef = useRef(null);
@@ -24,7 +25,7 @@ const MicrofonoKaraoke = () => {
     };
   }, []);
 
-  // 📊 MONITOREO DE AUDIO EN TIEMPO REAL
+  // 📊 MONITOREO DE AUDIO OPTIMIZADO PARA BAJA LATENCIA
   const startVoiceMonitoring = () => {
     if (!analyserRef.current) return;
 
@@ -35,37 +36,31 @@ const MicrofonoKaraoke = () => {
 
       analyserRef.current.getByteFrequencyData(dataArray);
 
-      // 🎯 CALCULAR NIVEL PROMEDIO (solo frecuencias de voz: 300Hz - 3400Hz)
+      // 🎯 CÁLCULO ULTRA-RÁPIDO (menos precisión pero MÁS VELOCIDAD)
       let sum = 0;
-      const voiceStart = Math.floor((300 * dataArray.length) / 22050); // 300Hz
-      const voiceEnd = Math.floor((3400 * dataArray.length) / 22050); // 3400Hz
+      const step = 4; // ⚡ SALTAR MUESTRAS = MENOS CÁLCULO
 
-      for (let i = voiceStart; i < voiceEnd; i++) {
+      for (let i = 20; i < 100; i += step) {
+        // Rango optimizado para voz
         sum += dataArray[i];
       }
 
-      const average = sum / (voiceEnd - voiceStart);
+      const average = sum / ((100 - 20) / step);
       const normalizedLevel = average / 255; // Normalizar 0-1
 
       setVoiceLevel(normalizedLevel);
 
-      // 🎤 DETECTAR SI HAY VOZ (por encima del umbral de sensibilidad)
+      // 🎤 DETECCIÓN INSTANTÁNEA DE VOZ
       const isVoiceActive = normalizedLevel > sensitivity;
       setIsVoiceDetected(isVoiceActive);
 
-      // 🚪 APLICAR NOISE GATE
+      // 🚪 APLICAR NOISE GATE INMEDIATO (sin interpolación = más rápido)
       if (noiseGateRef.current) {
-        if (isVoiceActive) {
-          // Permitir audio cuando hay voz
-          noiseGateRef.current.gain.value = 1;
-        } else {
-          // Bloquear audio cuando no hay voz cercana
-          noiseGateRef.current.gain.value = 0;
-        }
+        noiseGateRef.current.gain.value = isVoiceActive ? 1 : 0;
       }
 
-      // Continuar monitoreando
-      requestAnimationFrame(monitorAudio);
+      // ⚡ CONTINUAR CON ALTA FRECUENCIA
+      setTimeout(monitorAudio, 16); // ~60 FPS para respuesta rápida
     };
 
     monitorAudio();
@@ -77,67 +72,52 @@ const MicrofonoKaraoke = () => {
       setShowPermissionHelp(false);
       setIsConnected(false);
 
-      // Crear contexto de audio
-      audioContextRef.current = new (window.AudioContext ||
-        window.webkitAudioContext)();
+      // Crear contexto de audio con LATENCIA MÍNIMA
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      audioContextRef.current = new AudioContext({
+        latencyHint: "interactive", // ⚡ PRIORIDAD: INTERACTIVIDAD
+        sampleRate: 44100,
+      });
 
       // Reanudar contexto si está suspendido (necesario en algunos móviles)
       if (audioContextRef.current.state === "suspended") {
         await audioContextRef.current.resume();
       }
 
-      // Solicitar acceso al micrófono con configuración ANTI-FEEDBACK
+      // Solicitar acceso al micrófono con CONFIGURACIÓN DE LATENCIA MÍNIMA
       const constraints = {
         audio: {
           echoCancellation: true, // ✅ CANCELA EL ECO/FEEDBACK
-          noiseSuppression: true, // ✅ FILTRA RUIDOS DE FONDO
-          autoGainControl: true, // ✅ CONTROLA VOLUMEN AUTOMÁTICO
-          latency: 0,
+          noiseSuppression: false, // ❌ DESACTIVADO = MENOS LATENCIA
+          autoGainControl: false, // ❌ DESACTIVADO = MENOS LATENCIA
+          latency: 0, // ⚡ LATENCIA MÍNIMA
           sampleRate: 44100,
           channelCount: 1, // ✅ MONO = MEJOR PARA VOZ
+          bufferSize: 256, // ⚡ BUFFER PEQUEÑO = MENOS DELAY
         },
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
 
-      // Crear nodos de audio con FILTROS AVANZADOS DE PROXIMIDAD
+      // Crear nodos de audio OPTIMIZADOS PARA LATENCIA MÍNIMA
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const gainNode = audioContextRef.current.createGain();
 
-      // 📊 ANALIZADOR DE AUDIO - Monitorea niveles en tiempo real
+      // 📊 ANALIZADOR OPTIMIZADO - Configuración de baja latencia
       const analyser = audioContextRef.current.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.8;
+      analyser.fftSize = 512; // ⚡ MÁS PEQUEÑO = MENOS DELAY
+      analyser.smoothingTimeConstant = 0.1; // ⚡ RESPUESTA MÁS RÁPIDA
 
-      // 🚪 NOISE GATE - Solo permite sonidos cercanos/fuertes
+      // 🚪 NOISE GATE SIMPLE - Sin demora
       const noiseGate = audioContextRef.current.createGain();
       noiseGate.gain.value = 0; // Empieza cerrado
 
-      // 🎛️ FILTRO ESPECÍFICO PARA VOZ HUMANA (300Hz - 3400Hz)
-      const voiceLowpass = audioContextRef.current.createBiquadFilter();
-      voiceLowpass.type = "lowpass";
-      voiceLowpass.frequency.value = 3400; // Corta por encima de 3400Hz
-      voiceLowpass.Q.value = 1;
-
-      const voiceHighpass = audioContextRef.current.createBiquadFilter();
-      voiceHighpass.type = "highpass";
-      voiceHighpass.frequency.value = 300; // Corta por debajo de 300Hz
-      voiceHighpass.Q.value = 1;
-
-      // 🎛️ FILTRO NOTCH - Elimina frecuencias problemáticas específicas
-      const notchFilter = audioContextRef.current.createBiquadFilter();
-      notchFilter.type = "notch";
-      notchFilter.frequency.value = 60; // Elimina ruido eléctrico 60Hz
-      notchFilter.Q.value = 30;
-
-      // 🎛️ COMPRESOR - Controla dinámicas
-      const compressor = audioContextRef.current.createDynamicsCompressor();
-      compressor.threshold.value = -30; // Umbral más sensible
-      compressor.knee.value = 40; // Suavidad
-      compressor.ratio.value = 15; // Ratio fuerte
-      compressor.attack.value = 0.001; // Ataque muy rápido
-      compressor.release.value = 0.1; // Liberación rápida
+      // 🎛️ SOLO UN FILTRO ESENCIAL - Para mantener latencia baja
+      const voiceFilter = audioContextRef.current.createBiquadFilter();
+      voiceFilter.type = "bandpass"; // ⚡ UN SOLO FILTRO EN LUGAR DE DOS
+      voiceFilter.frequency.value = 1000; // Centro de frecuencia de voz
+      voiceFilter.Q.value = 0.5; // Q bajo = menos procesamiento
 
       sourceNodeRef.current = source;
       gainNodeRef.current = gainNode;
@@ -147,16 +127,23 @@ const MicrofonoKaraoke = () => {
       // Configurar ganancia (volumen)
       gainNode.gain.value = volume * 0.8; // Volumen seguro
 
-      // 🔗 CADENA DE AUDIO PROFESIONAL:
-      // micrófono -> analizador -> filtro voz -> notch -> compresor -> noise gate -> ganancia -> altavoces
-      source.connect(analyser);
-      analyser.connect(voiceHighpass);
-      voiceHighpass.connect(voiceLowpass);
-      voiceLowpass.connect(notchFilter);
-      notchFilter.connect(compressor);
-      compressor.connect(noiseGate);
-      noiseGate.connect(gainNode);
-      gainNode.connect(audioContextRef.current.destination);
+      // CONFIGURACIÓN DINÁMICA SEGÚN MODO DE LATENCIA
+      if (ultraLowLatency) {
+        // ⚡ MODO ULTRA-RÁPIDO: MÍNIMO PROCESAMIENTO
+        source.connect(noiseGate);
+        noiseGate.connect(gainNode);
+        gainNode.connect(audioContextRef.current.destination);
+
+        // Analizador en paralelo (no afecta latencia)
+        source.connect(analyser);
+      } else {
+        // 🎛️ MODO CALIDAD: CON FILTROS
+        source.connect(analyser);
+        analyser.connect(voiceFilter);
+        voiceFilter.connect(noiseGate);
+        noiseGate.connect(gainNode);
+        gainNode.connect(audioContextRef.current.destination);
+      }
 
       // 🎯 INICIAR MONITOREO DE VOZ
       startVoiceMonitoring();
@@ -471,7 +458,7 @@ const MicrofonoKaraoke = () => {
               <>
                 <span style={{ fontSize: "20px", marginRight: "4px" }}>📶</span>
                 <span style={{ color: "rgb(74, 222, 128)", fontSize: "14px" }}>
-                  Conectado
+                  Conectado {ultraLowLatency ? "⚡ Ultra-rápido" : "🎛️ Calidad"}
                 </span>
               </>
             ) : (
@@ -481,6 +468,17 @@ const MicrofonoKaraoke = () => {
                   Desconectado
                 </span>
               </>
+            )}
+            {isRecording && (
+              <div
+                style={{
+                  marginTop: "4px",
+                  fontSize: "12px",
+                  color: "rgba(255,255,255,0.6)",
+                }}
+              >
+                Latencia estimada: {ultraLowLatency ? "~50ms" : "~150ms"}
+              </div>
             )}
           </div>
         </div>
@@ -781,33 +779,64 @@ const MicrofonoKaraoke = () => {
           </ol>
         </div>
 
-        {/* Consejos de proximidad */}
+        {/* MODO DE LATENCIA */}
         <div
           style={{
             ...styles.instructionsBox,
-            backgroundColor: "rgba(34, 197, 94, 0.1)",
-            border: "1px solid rgba(34, 197, 94, 0.3)",
+            backgroundColor: ultraLowLatency
+              ? "rgba(34, 197, 94, 0.1)"
+              : "rgba(59, 130, 246, 0.1)",
+            border: ultraLowLatency
+              ? "1px solid rgba(34, 197, 94, 0.3)"
+              : "1px solid rgba(59, 130, 246, 0.3)",
           }}
         >
           <h3
-            style={{ ...styles.instructionsTitle, color: "rgb(74, 222, 128)" }}
+            style={{
+              ...styles.instructionsTitle,
+              color: ultraLowLatency
+                ? "rgb(74, 222, 128)"
+                : "rgb(96, 165, 250)",
+            }}
           >
-            🎯 Micrófono de proximidad:
+            ⚡ Modo actual: {ultraLowLatency ? "ULTRA RÁPIDO" : "CALIDAD ALTA"}
           </h3>
-          <ol style={styles.instructionsList}>
-            <li style={styles.instructionsItem}>
-              • Solo detecta TU VOZ cuando estás cerca
-            </li>
-            <li style={styles.instructionsItem}>
-              • Bloquea música de fondo automáticamente
-            </li>
-            <li style={styles.instructionsItem}>
-              • Ajusta la sensibilidad según tu distancia
-            </li>
-            <li style={styles.instructionsItem}>
-              • El medidor verde = tu voz se detecta ✅
-            </li>
-          </ol>
+          <p
+            style={{
+              color: "rgba(255, 255, 255, 0.8)",
+              fontSize: "14px",
+              margin: "0 0 12px 0",
+            }}
+          >
+            {ultraLowLatency
+              ? "Latencia mínima (~50ms) • Menos filtros"
+              : "Latencia normal (~200ms) • Mejor calidad"}
+          </p>
+          <button
+            onClick={() => {
+              setUltraLowLatency(!ultraLowLatency);
+              if (isRecording) {
+                alert("🔄 Reinicia el micrófono para aplicar el cambio");
+              }
+            }}
+            style={{
+              backgroundColor: ultraLowLatency
+                ? "rgb(59, 130, 246)"
+                : "rgb(34, 197, 94)",
+              color: "white",
+              padding: "8px 16px",
+              borderRadius: "8px",
+              border: "none",
+              fontSize: "14px",
+              fontWeight: "bold",
+              cursor: "pointer",
+              width: "100%",
+            }}
+          >
+            {ultraLowLatency
+              ? "🎛️ CAMBIAR A MODO CALIDAD"
+              : "⚡ CAMBIAR A MODO RÁPIDO"}
+          </button>
         </div>
 
         {/* Botón de ayuda */}
